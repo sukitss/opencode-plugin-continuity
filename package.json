@@ -1,0 +1,10 @@
+{
+  "name": "opencode-plugin-continuity",
+  "version": "0.1.0",
+  "description": "Keep coding agents running: clamp router model context limits, rescue misclassified context-overflow failures, and pace retries on provider 5xx.",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "private": true
+}
