@@ -30,7 +30,12 @@ try:
 except Exception as exc:
     sys.exit(f"ERROR: {cfg_path} is not plain JSON ({exc}) — refusing to edit blindly.")
 plugins = cfg.get("plugins") or []
-kept = [e for e in plugins if not (e == plugin or (isinstance(e, dict) and e.get("package") == plugin))]
+def is_ours(e):
+    # matches: local absolute path, git URLs, or {"package": ...} forms that
+    # reference this repo (covers installs made via ./install.sh --from-git)
+    s = e.get("package") if isinstance(e, dict) else e
+    return s == plugin or (isinstance(s, str) and "opencode-plugin-continuity" in s)
+kept = [e for e in plugins if not is_ours(e)]
 if len(kept) == len(plugins):
     print("plugin not registered — nothing to do")
 else:
@@ -46,24 +51,31 @@ fi
 
 if [ -f "$AGENTS_FILE" ]; then
   python3 - "$AGENTS_FILE" "$BEGIN_MARK" "$END_MARK" <<'PY'
-import re, sys, pathlib
+import re, shutil, sys, time, pathlib
 agents = pathlib.Path(sys.argv[1])
 begin, end = sys.argv[2], sys.argv[3]
 text = agents.read_text()
-if begin in text and end in text:
-    new = re.sub(re.escape(begin) + r".*?" + re.escape(end), lambda _m: "", text, count=1, flags=re.S)
+pattern = re.escape(begin) + r".*?" + re.escape(end)
+found = re.search(pattern, text, re.S)
+if found is None:
+    if begin in text or end in text:
+        sys.exit(f"ERROR: {agents.name} has markers but out of order — fix manually; refusing to edit.")
+    print("no managed block found — nothing to do")
+else:
+    new = re.sub(pattern, lambda _m: "", text, count=1, flags=re.S)
     new = re.sub(r"\n{3,}", "\n\n", new).strip()
+    backup = agents.with_name(agents.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
+    shutil.copy2(agents, backup)
     if new:
         agents.write_text(new + "\n")
-        print(f"managed block removed from {agents.name} (remaining user content kept)")
+        print(f"managed block removed from {agents.name} (remaining user content kept; backup: {backup.name})")
     else:
         agents.unlink()
-        print(f"managed block removed; {agents.name} contained only the block — file deleted")
-else:
-    print("no managed block found — nothing to do")
+        print(f"managed block removed; {agents.name} contained only the block — file deleted (backup: {backup.name})")
 PY
 else
   echo "no AGENTS.md found — nothing to do"
 fi
 
 echo "uninstalled."
+echo "reinstall anytime: bash $REPO_DIR/install.sh"

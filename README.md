@@ -11,15 +11,33 @@ Keeps OpenCode coding agents running — without patching OpenCode source.
   Claude Code's proactivity system, installed as the global `~/.config/opencode/AGENTS.md`
   between managed markers.
 
-## Install (one shot)
+## Install — one-liner (macOS & Linux)
 
 ```sh
-git clone <this-repo-url> && cd opencode-plugin-continuity && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/sukitss/opencode-plugin-continuity/main/install.sh | bash
 ```
 
-Idempotent: safe to rerun. Every config change is backed up (`*.bak-<timestamp>`) and the
-autonomy block is wrapped in managed markers, so existing content in `AGENTS.md` is never
-touched. Requires `python3`; `opencode` CLI optional (used for verification).
+- Clones this repo to `~/.local/share/opencode-plugin-continuity` (override with
+  `OPENCODE_CONTINUITY_DIR=/some/path`), then installs plugin + system prompt.
+- Rerunning it updates the clone and re-applies both pieces (idempotent).
+- Requires: `git`, `python3` (and `bash`). The repo must be public for this URL to work.
+
+## Install — from a manual clone
+
+```sh
+git clone https://github.com/sukitss/opencode-plugin-continuity.git
+cd opencode-plugin-continuity && ./install.sh
+```
+
+## Uninstall
+
+```sh
+# one-liner installs:
+bash ~/.local/share/opencode-plugin-continuity/uninstall.sh
+
+# manual clones:
+./uninstall.sh
+```
 
 ## Install from a git remote (after pushing this repo)
 

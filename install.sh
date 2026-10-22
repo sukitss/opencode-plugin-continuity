@@ -1,17 +1,57 @@
 #!/usr/bin/env bash
 # opencode-plugin-continuity — one-shot installer.
 #
+# One-liner (macOS & Linux) — clones this repo, then installs:
+#   curl -fsSL https://raw.githubusercontent.com/sukitss/opencode-plugin-continuity/main/install.sh | bash
+#
+# Or from an existing clone:
+#   ./install.sh [--from-git]
+#
 # Installs, idempotently and without overwriting unrelated content:
-#   1. the plugin (registers this repo's absolute path in the global config,
+#   1. the plugin (registers the repo's absolute path in the global config,
 #      or via `opencode plugin add <git-url>` with --from-git once pushed)
 #   2. the autonomy system prompt (~/.config/opencode/AGENTS.md, wrapped in
 #      managed markers so updates/removals never touch surrounding text)
 #
 # Every config mutation is preceded by a timestamped backup.
-# Usage:  ./install.sh [--from-git]
+# Env: OPENCODE_CONTINUITY_DIR overrides the bootstrap clone destination.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_URL="https://github.com/sukitss/opencode-plugin-continuity.git"
+
+# ---------- locate repo (bootstrap when run via curl | bash) ----------
+# Guard against re-entry: after cloning we exec the cloned install.sh, which
+# must NOT bootstrap again even if its own BASH_SOURCE looks unusual.
+if [ -n "${_OPENCODE_CONTINUITY_BOOTSTRAP:-}" ]; then
+  REPO_DIR="$_OPENCODE_CONTINUITY_BOOTSTRAP"
+  [ -f "$REPO_DIR/index.ts" ] || { echo "ERROR: broken clone at $REPO_DIR (missing index.ts)" >&2; exit 1; }
+else
+  SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+  if [ -n "$SCRIPT_PATH" ] && [ -f "$(dirname "$SCRIPT_PATH")/index.ts" ]; then
+    REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  else
+    command -v git >/dev/null 2>&1 || { echo "ERROR: git is required for the one-liner install" >&2; exit 1; }
+    TARGET="${OPENCODE_CONTINUITY_DIR:-$HOME/.local/share/opencode-plugin-continuity}"
+    if [ -e "$TARGET" ] && [ ! -d "$TARGET/.git" ]; then
+      echo "ERROR: $TARGET exists but is not a git clone of this repo." >&2
+      echo "Remove it (or point OPENCODE_CONTINUITY_DIR elsewhere) and rerun." >&2
+      exit 1
+    fi
+    if [ -d "$TARGET/.git" ]; then
+      echo "==> updating existing clone at $TARGET"
+      git -C "$TARGET" pull --ff-only </dev/null
+    else
+      echo "==> cloning into $TARGET"
+      git clone --depth 1 "$REPO_URL" "$TARGET" </dev/null || {
+        echo "ERROR: clone failed (private repo? clone manually, then run ./install.sh from it)" >&2
+        exit 1
+      }
+    fi
+    export _OPENCODE_CONTINUITY_BOOTSTRAP="$TARGET"
+    exec bash "$TARGET/install.sh" ${1+"$@"} </dev/null
+  fi
+fi
+
 NAME="continuity"
 PLUGIN_PATH="$REPO_DIR"
 BEGIN_MARK='<!-- opencode-plugin-continuity:autonomy begin (managed block — reinstall/update via install.sh) -->'
@@ -84,16 +124,21 @@ if text is None:
     print(f"created {agents}")
     sys.exit(0)
 if begin in text and end in text:
-    current = re.search(re.escape(begin) + r".*?" + re.escape(end), text, re.S)
-    if current and current.group(0).strip() == block:
+    pattern = re.escape(begin) + r".*?" + re.escape(end)
+    current = re.search(pattern, text, re.S)
+    if current is None:
+        sys.exit(f"ERROR: {agents.name} has markers but out of order (end before begin) — "
+                 "fix manually; refusing to edit.")
+    if current.group(0).strip() == block:
         print("system prompt already up to date — skip")
     else:
         backup = agents.with_name(agents.name + ".bak-" + stamp)
         shutil.copy2(agents, backup)
-        agents.write_text(re.sub(re.escape(begin) + r".*?" + re.escape(end),
-                                 lambda _m: block, text, count=1, flags=re.S))
+        agents.write_text(re.sub(pattern, lambda _m: block, text, count=1, flags=re.S))
         print(f"updated managed block in {agents.name} (backup: {backup.name})")
 else:
+    if begin in text or end in text:
+        sys.exit(f"ERROR: {agents.name} has a half-present marker — fix manually; refusing to edit.")
     backup = agents.with_name(agents.name + ".bak-" + stamp)
     shutil.copy2(agents, backup)
     sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
@@ -104,10 +149,10 @@ PY
 
 # ---------- 3) verify ----------
 if command -v opencode >/dev/null 2>&1; then
-  if opencode plugin list 2>/dev/null | grep -q "$NAME"; then
+  if opencode plugin list 2>/dev/null | grep -F "$NAME" >/dev/null; then
     say "verify: opencode plugin list shows '$NAME' — active"
   else
     say "verify: '$NAME' not listed yet (hot-load may take a few seconds; rerun 'opencode plugin list')"
   fi
 fi
-say "done. rollback anytime: ./uninstall.sh"
+say "done. rollback anytime: bash $REPO_DIR/uninstall.sh"
