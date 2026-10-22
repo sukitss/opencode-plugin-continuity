@@ -18,33 +18,34 @@
  */
 
 import { execFile } from "node:child_process"
+import { writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-/** Run `sync-models.sh --check` once; log a warning when limits drifted. */
+/** Run `sync-models.sh --check` once; record drift in sync-status.txt (plugin
+ *  console output is not captured by the v2.0.30 log, so a file is verifiable). */
 function checkLimitDriftOnce(): void {
   if (process.env.OPENCODE_SYNC_CHECK === "0") return
   try {
     const dir = dirname(fileURLToPath(import.meta.url))
     execFile(
-      "python3",
-      [join(dir, "sync-models.sh"), "--check"],
+      join(dir, "sync-models.sh"),
+      ["--check"],
       { timeout: 120_000 },
       (err, stdout) => {
+        const stamp = new Date().toISOString()
+        const status = join(dir, "sync-status.txt")
         if (err) {
-          console.log("[continuity] limit drift-check failed:", String((err as Error).message ?? err))
+          writeFileSync(status, `${stamp} drift-check FAILED: ${String((err as Error).message ?? err)}\n`)
           return
         }
         const match = String(stdout).match(/--check:\s*(\d+)\s+change/)
         const pending = match ? Number(match[1]) : 0
-        if (pending > 0) {
-          console.log(
-            `[continuity] model limits drifted from router/profiles — ${pending} update(s) available. ` +
-              `run: ${join(dir, "sync-models.sh")}`,
-          )
-        } else {
-          console.log("[continuity] model limits in sync with router/profiles")
-        }
+        const line =
+          pending > 0
+            ? `${stamp} drifted: ${pending} update(s) available — run sync-models.sh\n`
+            : `${stamp} in sync with router/profiles\n`
+        writeFileSync(status, line)
       },
     )
   } catch (err) {
