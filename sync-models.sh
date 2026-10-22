@@ -42,26 +42,42 @@ def key_for(pid: str):
     except Exception:
         return None
 
-# Family profiles (regex → limit.context). Order matters: first match wins.
-# Sources: vendor specs (openai.com, ai.google.dev, z.ai, llm-stats) + the
-# 9router catalog's own per-id values + local empirical evidence (glm-5.3
-# processed 984,747-token prompts successfully; 1261 wall ≈ advertised).
+# Family profiles: (regex, base_context_when_router_silent, compaction_target_pct)
+#
+# pct = where auto-compact SHOULD fire, as a share of the advertised window —
+# the "effective context" point before long-context quality degrades. OpenCode's
+# ceiling is always 90% of limit.context, so limit.context = base × pct / 0.9.
+#
+# Sources (researched 2026-10-23):
+# - OpenAI system-card coverage: GPT-6.1 Sol hard input max = 922K (1.05M − 128K output)
+#   → pct 85 keeps the ceiling (~893K) below that wall.
+# - Google MRCR v2 (self-published): Gemini multi-needle degrades past 256K; single-needle
+#   holds near 1M → agentic work sits between → pct 65.
+# - NVIDIA RULER: frontier models reliably use only 50-65% of advertised windows for
+#   multi-hop work → family pct values stay within/below the top of that band.
+# - LongCodeEdit (nrehiew): reasoning-over-long-code degrades earlier than retrieval;
+#   older Kimi-K2/GLM-4.5 <32K — newer 1M-class gens are far better but not at 100%.
+# - Local evidence: glm-5.3 processed a 984,747-token prompt (94% of advertised) —
+#   needle-capacity confirmed, but IndexPool compression is lossy → pct 80, not 90.
+# - Moonshot: Kimi K3 KDA claims usable 1M, flat pricing → pct 75 (conservative-middle).
 PROFILES = [
-    (r"gpt-6\.1",            1_050_000),  # OpenAI GPT-6.1 (Sol) — 1M input / 128k out
-    (r"gpt-6",               272_000),    # GPT-6 base tier ([1m] variants come from router data)
-    (r"gpt-5\.6-sol",        372_000),
-    (r"gpt-5\.6",            272_000),
-    (r"gemini-(4\.|4-|3\.[5-9])", 1_048_576),  # Google 1M class (3.8 Flash / 4 Argon verified)
-    (r"claude-(opus|sonnet)-[4-9]", 1_000_000),  # 2026 Claude gen — 1M per catalog
-    (r"glm-5\.[2-9]",        1_048_576),  # Z.ai 1M class (5.2/5.3)
-    (r"glm-5",               200_000),    # glm-5 / 5.1 / 5-turbo
-    (r"glm-4\.7",            200_000),
-    (r"deepseek-v[4-9]",     1_000_000),
-    (r"kimi-k3",             1_048_576),
-    (r"kimi-k2",             262_144),
-    (r"grok-[45]",           256_000),
-    (r"seed-2-0",            200_000),
+    (r"kimi-k3",                  1_048_576, 75),
+    (r"kimi-k2",                  262_144,   80),
+    (r"gpt-6\.1",                 1_050_000, 85),
+    (r"^coding",                  1_050_000, 85),
+    (r"gpt-6",                    272_000,   85),
+    (r"gpt-5\.6-sol",             372_000,   80),
+    (r"gpt-5\.6",                 272_000,   85),
+    (r"gemini-(4\.|4-|3\.[5-9])", 1_048_576, 65),
+    (r"claude-(opus|sonnet)-[4-9]", 1_000_000, 75),
+    (r"glm-5\.[2-9]",             1_048_576, 80),
+    (r"glm-5",                    200_000,   85),
+    (r"glm-4\.7",                 200_000,   85),
+    (r"deepseek-v[4-9]",          1_000_000, 75),
+    (r"grok-[45]",                256_000,   75),
+    (r"seed-2-0",                 200_000,   85),
 ]
+DEFAULT_PCT = 90  # no profile match → trust the advertised window (opencode default)
 
 report, changed = [], []
 for pid, prov in (cfg.get("provider") or {}).items():
@@ -93,18 +109,24 @@ for pid, prov in (cfg.get("provider") or {}).items():
         if not isinstance(m, dict):
             report.append(f"{pid}/{mid}: not an object — skipped")
             continue
-        target, src = adv.get(mid), "router"
-        if not target:
-            for pat, ctx in PROFILES:
-                if re.search(pat, mid):
-                    target, src = ctx, "profile"
-                    break
-        if not target:
+        base = adv.get(mid)
+        pct = DEFAULT_PCT
+        src = "router"
+        for pat, pbase, ppct in PROFILES:
+            if re.search(pat, mid):
+                if not base:
+                    base, src = pbase, "profile"
+                else:
+                    src = f"router+profile({ppct}%)"
+                pct = ppct
+                break
+        if not base:
             report.append(f"{pid}/{mid}: no router data, no profile — kept {(m.get('limit') or {}).get('context')}")
             continue
+        target = int(base * pct / 90 / 1000 + 0.5) * 1000  # pct/100 ÷ 0.9-ceiling
         lim = m.setdefault("limit", {})
         old = lim.get("context")
-        line = f"{pid}/{mid}: {old:,} → {target:,} [{src}]  (compact @ {int(target*0.9):,})"
+        line = f"{pid}/{mid}: {old:,} → {target:,} [{src}]  (compact @ {int(target*0.9):,} = {pct}% of base)"
         if old != target:
             lim["context"] = target
             changed.append(line)

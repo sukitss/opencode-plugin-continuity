@@ -10,9 +10,47 @@
  *  2. retry-tuning — provider 5xx: give the origin 30s+ before retrying instead
  *     of ten fast attempts in ~84s.
  *
- * Model context limits are clamped in opencode.json directly (limit.context),
- * because v2.0.30 model-transform edits do not reach the model read path.
+ * Model context limits are synced into opencode.json directly (limit.context,
+ * see sync-models.sh) because v2.0.30 model-transform edits do not reach the
+ * model read path. On startup this plugin runs `sync-models.sh --check` once
+ * and logs a warning when the config has drifted from the router/profiles
+ * (detection only — applying stays a deliberate, human-run step).
  */
+
+import { execFile } from "node:child_process"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+
+/** Run `sync-models.sh --check` once; log a warning when limits drifted. */
+function checkLimitDriftOnce(): void {
+  if (process.env.OPENCODE_SYNC_CHECK === "0") return
+  try {
+    const dir = dirname(fileURLToPath(import.meta.url))
+    execFile(
+      "python3",
+      [join(dir, "sync-models.sh"), "--check"],
+      { timeout: 120_000 },
+      (err, stdout) => {
+        if (err) {
+          console.log("[continuity] limit drift-check failed:", String((err as Error).message ?? err))
+          return
+        }
+        const match = String(stdout).match(/--check:\s*(\d+)\s+change/)
+        const pending = match ? Number(match[1]) : 0
+        if (pending > 0) {
+          console.log(
+            `[continuity] model limits drifted from router/profiles — ${pending} update(s) available. ` +
+              `run: ${join(dir, "sync-models.sh")}`,
+          )
+        } else {
+          console.log("[continuity] model limits in sync with router/profiles")
+        }
+      },
+    )
+  } catch (err) {
+    console.log("[continuity] limit drift-check skipped:", String(err))
+  }
+}
 
 export interface ContinuityOptions {
   /** Minimum delay for 5xx retries (capped at 60s). Default 30000. */
@@ -75,6 +113,8 @@ export default {
   async setup(ctx: ContinuityContext) {
     const serverErrorDelayMs = ctx.options?.serverErrorDelayMs ?? DEFAULT_SERVER_ERROR_DELAY_MS
     const rescueOverflow = ctx.options?.rescueOverflow !== false
+
+    checkLimitDriftOnce()
 
     await ctx.session.hook("retry", (event) => {
       if (rescueOverflow && looksLikePromptTooLong(event.error?.message)) {
