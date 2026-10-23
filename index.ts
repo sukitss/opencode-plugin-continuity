@@ -18,16 +18,26 @@
  */
 
 import { execFile } from "node:child_process"
-import { writeFileSync } from "node:fs"
+import { statSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 /** Run `sync-models.sh --check` once; record drift in sync-status.txt (plugin
- *  console output is not captured by the v2.0.30 log, so a file is verifiable). */
+ *  console output is not captured by the v2.0.30 log, so a file is verifiable).
+ *  Re-runs on every plugin settlement — including /reload — throttled to once
+ *  per 10 minutes so watcher storms don't hammer the router catalogs. */
+const DRIFT_CHECK_THROTTLE_MS = 10 * 60 * 1000
+
 function checkLimitDriftOnce(): void {
   if (process.env.OPENCODE_SYNC_CHECK === "0") return
   try {
     const dir = dirname(fileURLToPath(import.meta.url))
+    const status = join(dir, "sync-status.txt")
+    try {
+      if (Date.now() - statSync(status).mtimeMs < DRIFT_CHECK_THROTTLE_MS) return
+    } catch {
+      /* no status file yet → run */
+    }
     execFile(
       join(dir, "sync-models.sh"),
       ["--check"],
