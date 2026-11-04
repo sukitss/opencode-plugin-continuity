@@ -7,9 +7,11 @@ Keeps OpenCode coding agents running — without patching OpenCode source.
   the session to compact so the next prompt continues; paces retries on HTTP 5xx (30s delay).
   Model context limits are clamped via config (see `agents/autonomy.md` ticket history —
   v2.0.30 `model.transform` does not reach the model read path).
-- **System prompt** (`agents/autonomy.md`): "work until done" autonomy rules, adapted from
-  Claude Code's proactivity system, installed as the global `~/.config/opencode/AGENTS.md`
-  between managed markers.
+- **System prompt** (`agents/autonomy.md`): **retired.** Earlier versions installed these
+  "work until done" rules as the global `~/.config/opencode/AGENTS.md`; that role now
+  belongs to the [capy-lead](https://github.com/capytron/opencode-capy-lead) plugin,
+  which manages its own marked section. `install.sh` only removes any legacy block it
+  previously wrote (with backup); it never appends instructions anymore.
 
 ## Install — one-liner (macOS & Linux)
 

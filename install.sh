@@ -10,8 +10,10 @@
 # Installs, idempotently and without overwriting unrelated content:
 #   1. the plugin (registers the repo's absolute path in the global config,
 #      or via `opencode plugin add <git-url>` with --from-git once pushed)
-#   2. the autonomy system prompt (~/.config/opencode/AGENTS.md, wrapped in
-#      managed markers so updates/removals never touch surrounding text)
+#   2. REMOVES any legacy autonomy block this installer wrote in earlier
+#      versions (~/.config/opencode/AGENTS.md). Autonomy is now owned by the
+#      capy-lead plugin, which manages its own marked section there; running
+#      both would load duplicate instructions on every request.
 #
 # Every config mutation is preceded by a timestamped backup.
 # Env: OPENCODE_CONTINUITY_DIR overrides the bootstrap clone destination.
@@ -70,7 +72,6 @@ done
 say()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
-[ -f "$BLOCK_FILE" ] || fail "missing $BLOCK_FILE"
 
 # ---------- 1) plugin ----------
 if [ "${1:-}" = "--from-git" ]; then
@@ -109,43 +110,30 @@ else:
 PY
 fi
 
-# ---------- 2) autonomy system prompt ----------
-mkdir -p "$CONFIG_DIR"
-python3 - "$AGENTS_FILE" "$BLOCK_FILE" "$BEGIN_MARK" "$END_MARK" <<'PY'
+# ---------- 2) autonomy system prompt (RETIRED — owned by capy-lead) ----------
+# Older versions of this installer appended an autonomy block here. If one is
+# present, remove it (with backup). Raw user-written text is never touched;
+# if you still want global autonomy rules, install the capy-lead plugin.
+if [ -f "$AGENTS_FILE" ] && { grep -qF "$BEGIN_MARK" "$AGENTS_FILE" || grep -qF "$END_MARK" "$AGENTS_FILE"; }; then
+  python3 - "$AGENTS_FILE" "$BEGIN_MARK" "$END_MARK" <<'PY'
 import re, shutil, sys, time, pathlib
 agents = pathlib.Path(sys.argv[1])
-block = pathlib.Path(sys.argv[2]).read_text().strip()
-begin, end = sys.argv[3], sys.argv[4]
-text = agents.read_text() if agents.exists() else None
-stamp = time.strftime("%Y%m%d-%H%M%S")
-if text is None:
-    agents.parent.mkdir(parents=True, exist_ok=True)
-    agents.write_text(block + "\n")
-    print(f"created {agents}")
-    sys.exit(0)
+begin, end = sys.argv[2], sys.argv[3]
+text = agents.read_text()
 if begin in text and end in text:
-    pattern = re.escape(begin) + r".*?" + re.escape(end)
-    current = re.search(pattern, text, re.S)
-    if current is None:
-        sys.exit(f"ERROR: {agents.name} has markers but out of order (end before begin) — "
-                 "fix manually; refusing to edit.")
-    if current.group(0).strip() == block:
-        print("system prompt already up to date — skip")
-    else:
-        backup = agents.with_name(agents.name + ".bak-" + stamp)
-        shutil.copy2(agents, backup)
-        agents.write_text(re.sub(pattern, lambda _m: block, text, count=1, flags=re.S))
-        print(f"updated managed block in {agents.name} (backup: {backup.name})")
-else:
-    if begin in text or end in text:
-        sys.exit(f"ERROR: {agents.name} has a half-present marker — fix manually; refusing to edit.")
-    backup = agents.with_name(agents.name + ".bak-" + stamp)
+    pattern = re.escape(begin) + r"[^\S\n]*\r?\n?[\s\S]*?" + re.escape(end) + r"[^\S\n]*\r?\n?"
+    backup = agents.with_name(agents.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
     shutil.copy2(agents, backup)
-    sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    agents.write_text(text + sep + block + "\n")
-    print(f"appended managed block to existing {agents.name} (backup: {backup.name}); "
-          "existing content was not modified")
+    agents.write_text(re.sub(pattern, "", text))
+    print(f"removed legacy autonomy block from {agents.name} (backup: {backup.name})")
+elif begin in text or end in text:
+    sys.exit(f"ERROR: {agents.name} has a half-present marker — fix manually; refusing to edit.")
+else:
+    print("no legacy autonomy block — nothing to do")
 PY
+else
+  say "autonomy: no legacy block present (owned by the capy-lead plugin now)"
+fi
 
 # ---------- 3) verify ----------
 if command -v opencode >/dev/null 2>&1; then

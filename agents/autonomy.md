@@ -1,3 +1,7 @@
+> RETIRED — this block is no longer installed. Global autonomy is owned by the
+> capy-lead plugin, which manages its own marked section in AGENTS.md. This file
+> is kept for history; `install.sh` only removes legacy blocks it wrote earlier.
+
 <!-- opencode-plugin-continuity:autonomy begin (managed block — reinstall/update via install.sh) -->
 # Autonomy — work until done
 
